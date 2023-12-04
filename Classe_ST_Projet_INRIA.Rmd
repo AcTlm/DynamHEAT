@@ -1,0 +1,254 @@
+---
+title: "Deffilait_prepraration_exploration"
+output: html_document
+date: "2023-11-30"
+---
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+```
+## Liens :
+https://www.imo.universite-paris-saclay.fr/~yannig.goude/Materials/time_series/cours1_R_serie_temp.pdf
+
+## Test sur les données Deffilait pour la vache 315
+# Importer fichier vache 315 
+
+```{r cars}
+df_TR <- read_delim("FR-35275152_FR3587203408_#315_rumen_temp.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+df_TA = read_delim("temeprature_batiment.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+```
+
+## COncaténer les deux fichiers pour faire correspondre les Temperatures par date 
+```{r}
+colnames(df_TR)[colnames(df_TR) == "date hour"] <- "timestamp"
+df <- merge(df_TR, df_TA, by = "timestamp")
+colnames(df)[colnames(df) == "corrected_temperature"] <- "Temp_rumen_corr"
+```
+
+## Analayse de l'ordre d'autocorrélation
+```{r}
+acf(df$temp_etable,lag.max=20)# -->1
+acf(df$Temp_rumen_corr,lag.max=20)# -->1
+```
+
+## PLot temeprature ruminale et temperature ambiante
+```{r pressure, echo=FALSE}
+# Convertir la colonne timestamp en format POSIXct
+df$timestamp <- as.POSIXct(df$timestamp, format = "%m/%d/%Y %H:%M")
+df_2017 <- subset(df, format(timestamp, "%Y") == "2017") #l'année 2017
+df_2017$axe_x <- seq_along(df_2017$temp_etable)
+```
+
+```{r}
+# temperature étable 
+ggplot(df_2017, aes(x = axe_x, y = temp_etable)) +
+  geom_line(color = "blue") +
+  labs(x = "Index", y = "temp_etable") +
+  theme_minimal()
+```
+```{r}
+# temperature rumen
+ggplot(df_2017, aes(x = axe_x, y = Temp_rumen_corr)) +
+  geom_line(color = "red") +
+  labs(x = "Index", y = "T°_ruminale_corrigée") +
+  theme_minimal()
+```
+
+# Mesure de la cross correlation entre les deux series: 
+```{r}
+ccf(df$temp_etable, df$Temp_rumen_corr)
+```
+
+
+# Distinguer les états ST et NonST
+L'objectif de cette partie est de distinguer deux états observationnels de a temperature ruminale. A terme : ces deuc etats devraient alimenter un HMM. 
+
+## Méthode 1 - Amplitude
+# Amplitude
+Pour construire identifier des états de stress thermoque l'une des hypothèse est que l'amplitude de temperature journaliere en periode forte chaleur st plus importante qu'en periode "normale". L\'objectif est d'analyser l'amplitude mensuelle et mesurer la corrélation à avec la température ambiante
+
+### Tableau des différences d'amplitude
+```{r}
+df$mois <- format(df$timestamp, "%Y-%m")
+df$jour <- format(df$timestamp, "%Y-%m-%d")
+
+# Calculer l'amplitude quotidienne
+df <- df %>%
+  group_by(jour) %>%
+  mutate(amplitude_etable = max(temp_etable) - min(temp_etable),
+  amplitude_rumen = max(Temp_rumen_corr) - min(Temp_rumen_corr))
+
+# Agréger par mois et calculer la moyenne et l'écart-type de l'amplitude quotidienne
+tableau_mois <- df %>%
+  group_by(mois) %>%
+  summarise(
+    moy_jour_amplitude_etable= mean(amplitude_etable),
+    sd_jour_amplitude_etable = sd(amplitude_etable),
+    moy_jour_amplitude_rumen = mean(amplitude_rumen),
+    sd_jour_amplitude_rumen = sd(amplitude_rumen))
+
+
+```
+
+###  Boxplot amplitude des deux series
+```{r}
+# Tracer le boxplot pour l'amplitude quotidienne
+par(mfrow =c(2,2))
+
+ggplot(df, aes(x = "", y = amplitude_etable)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(x = "", y = "Amplitude quotidienne de ampltude_etable")
+
+# Tracer le boxplot pour l'amplitude quotidienne
+ggplot(df, aes(x = "", y = temp_etable)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(x = "", y = "Amplitude quotidienne de temp_etable")
+
+# Tracer le boxplot pour l'amplitude quotidienne
+ggplot(df, aes(x = "", y = Temp_rumen_corr)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(x = "", y = " Dispersion de la temperature ruminale parjou")
+
+# Tracer le boxplot pour l'amplitude quotidienne
+ggplot(df, aes(x = "", y = amplitude_rumen)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(x = "", y = " Dispersion de l'Amplitude de la temperature ruminale parjour") 
+
+```
+
+
+## Méthode 1 - Quantiles
+```{r}
+tab_quantiles <- matrix(NA, nrow = 4, ncol = 8)
+
+# Calculer et stocker les quantiles pour chaque colonne
+tab_quantiles[1, ] <- quantile(df$temp_etable, c(0.01, 0.025, 0.05, 0.1, 0.9, 0.95, 0.975, 0.99))
+tab_quantiles[2, ] <- quantile(df$amplitude_etable, c(0.01, 0.025, 0.05, 0.1, 0.9, 0.95, 0.975, 0.99))
+tab_quantiles[3, ] <- quantile(df$Temp_rumen_corr, c(0.01, 0.025, 0.05, 0.1, 0.9, 0.95, 0.975, 0.99))
+tab_quantiles[4, ] <- quantile(df$amplitude_rumen, c(0.01, 0.025, 0.05, 0.1, 0.9, 0.95, 0.975, 0.99))
+
+# Créer un dataframe à partir de la matrice
+tab_quantiles <- as.data.frame(tab_quantiles)
+
+# Nommer les colonnes
+colnames(tab_quantiles) <- c(0.01, 0.025, 0.05, 0.1, 0.9, 0.95, 0.975, 0.99)
+rownames(tab_quantiles) = c("Temperature etable", "Amplitude etable jour","Temperature rumen", "Amplitude rumen jour")
+# Afficher le tableau
+print(tab_quantiles)
+```
+
+## Méthode 2 - Distributiuons
+
+Observer les distributions des valeurs de temepératures ruminales. SI il y a deux gaussiennes : on peut séparer au milieu. Un des freins possibles eqt que les valeurs de Temperatur ruminale ont éét corrigée le plus souvent à la valeur entiere du dessus et a variabilité initale n'est pas immense. 
+
+### Application à la vache test - 315 
+Sortie graph 
+```{r}
+ #Température ruminale corrigée
+# length(df_TR$corrected_temperature) = 122634
+x = df_TR$corrected_temperature
+hist(x,breaks =200)
+#lines(density(x), col = "red") fonctionne pas 
+```
+
+### Application à toutes les vaches 
+sortie graph dans le dossier "DIstribution_TR"
+```{r}
+
+```
+
+## Méthode 3 - Clustering Kmeans  2 groupes 
+### Vache test 315
+```{r}
+# K-means clustering
+kmeans_result <- kmeans(df_TR$corrected_temperature, centers = 2)
+df_TR$cluster <- kmeans_result$cluster
+
+# A quelle valeur de temperature ruminale , la séparation est elel rélisée ? 
+df_TR_clus1 <- subset(df_TR, cluster == 1)
+summary(df_TR_clus1)
+
+df_TR_clus2 <- subset(df_TR, cluster == 2)
+summary(df_TR_clus2)
+
+# Plot de la vache 315 
+plot(df_TR$corrected_temperature, col = df_TR$cluster, pch = 1, xlab = "Temperature ruminale corrigée", ylab = "Cluster")
+abline(h = 39.25, lty = 2, col = "red")
+
+#Plot pour le premier jour
+df_TR_jour1 = df_TR[1:288,]
+df_TR_jour1$timestamp <- as.POSIXlt(df_TR_jour1$timestamp, format = "%m/%d/%Y %H:%M")
+x = df_TR_jour1$corrected_temperature
+y = df_TR_jour1$timestamp$hour
+plot(y,x, col = df_TR_jour1$cluster, pch = 1, xlab = "Heure de la journée", ylab = "Temperature ruminale corrigée")
+```
+Selon cette classification , la vache laitière est en stress thermique une partie de la journée à part pour certains jiur, où elle l'est aussi la nuit. 
+
+L'objectif ets de ne faire apparaitre que les phase diurne entre 6H00 et 18H00
+
+```{r}
+df_TR$timestamp <- as.POSIXlt(df_TR$timestamp, format = "%m/%d/%Y %H:%M") #connvertir en seconde pour séparer les heures de la journée
+hours <- df_TR$timestamp$hour
+minutes <- df_TR$timestamp$min
+seconds <- df_TR$timestamp$sec
+df_TR$timestamp_in_seconds <- hours * 3600 + minutes * 60 + seconds
+
+jour <- df_TR$timestamp_in_seconds >= 21600 |df_TR$timestamp_in_seconds >= 64800 ## jour 
+plot(
+  df_TR$corrected_temperature, 
+  col = ifelse(jour, "red", "blue"), #ROuge = cluster 1 et bleu = cluster 2 . 
+  xlab = "Température ruminale corrigée de la journée", 
+  ylab = "Cluster"
+)
+
+rm(hours,minutes,seconds)
+```
+Observation de la classification pour le premier jour:
+
+```{r}
+#connvertir en seconde pour séparer les heures de la journée
+hours <- df_TR_jour1$timestamp$hour
+minutes <- df_TR_jour1$timestamp$min
+seconds <- df_TR_jour1$timestamp$sec
+df_TR_jour1$timestamp_in_seconds <- hours * 3600 + minutes * 60 + seconds
+
+jour <- df_TR_jour1$timestamp_in_seconds >= 21600 |df_TR_jour1$timestamp_in_seconds >= 64800 ## jour 
+plot(
+  df_TR_jour1$corrected_temperature, 
+  col = ifelse(jour, "red", "blue"), #ROuge = cluster 1 et bleu = cluster 2 . 
+  xlab = "Température ruminale corrigée de la journée", 
+  ylab = "Cluster",
+  pch = 19
+)
+
+rm(hours,minutes,seconds)
+```
+Ce qu'on observe c'est que pour les périodes de jour entre 6h0 et 18h00 on observe les deuc classes ; > 39.2à et < 39.20. Cette cassification n'st pas resectée certaines valerus à 39.10 ont en bleu et d'autres à 39.3 sont en rouge ( sépareation pas net). Auyrement le choix des heures ne semble pas le bon CONCLUSION: Mauvaise clasisficattion à moins que la vace laitoere soit en stress thermique en continue ce qui peu probabale en janvier à une température étable de 15°C 
+
+## Méthode 4 - Ecart à la moyenne de la série
+```{r}
+df_TR$timestamp <- as.POSIXct(df_TR$timestamp, format = "%Y-%m-%d %H:%M:%S")
+df_TR$timestamp_in_seconds <- as.numeric(df_TR$timestamp)
+df_TR$deviation_from_mean <- df_TR$ruminal_temperature - mean(df_TR$ruminal_temperature)
+
+# Plot + tri des valeurs sur 
+plot(df_TR$deviation_from_mean, col = ifelse(df_TR$deviation_from_mean >= 0, "black", "lightgrey"),pch = 20, xlab = "Index", ylab = "Deviation from Mean")
+legend("topright", legend = c("Positive", "Non-Positive"), col = c("black", "lightgrey"), pch = 20)
+```
+### DIstribution des ecarts à la moyenne
+Sur toutes les valeurs 
+```{r}
+hist(df_TR$deviation_from_mean,breaks = 100)
+```
+```{r}
+# Faire une distribution des valeurs c'ecarts à la moyenne > 0 
+positif = subset(df_TR,deviation_from_mean >= 0)
+hist(positif$deviation_from_mean,breaks = 20)
+```
+
